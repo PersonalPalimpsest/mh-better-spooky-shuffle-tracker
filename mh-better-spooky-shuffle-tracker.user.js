@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         🐭️ MouseHunt - Better Spooky Shuffle Tracker
-// @version      1.1.2
+// @version      1.2.2
 // @description  Play Spooky Shuffle more easily.
 // @license      MIT
-// @author       bradp
+// @author       bradp, asterios
 // @namespace    bradp
 // @match        https://www.mousehuntgame.com/*
 // @icon         https://brrad.com/mouse.png
@@ -72,12 +72,21 @@
 		return JSON.parse(localStorage.getItem('mh-spooky-shuffle-cards')) || [];
 	};
 
-	const renderSavedCard = (card) => {
-		if (! card) {
-			return;
+	const getSavedBoards = () => {
+		return JSON.parse(localStorage.getItem('mh-spooky-shuffle-boards')) || {};
+	};
+
+	const isNewBoard = (board, req) => {
+		// Check if all of the card names are null.
+		if (board.every((card) => card.name === null)) {
+			return true;
 		}
 
-		if (card.is_matched) {
+		return (req.memory_game.num_tickets !== localStorage.getItem('mh-spooky-shuffle-cached-tickets'));
+	};
+
+	const renderSavedCard = (card) => {
+		if (! card || ! card.is_matched) {
 			return;
 		}
 
@@ -89,7 +98,7 @@
 		// set the .itemImage child to the card's image
 		const cardFront = cardElement.querySelector('.halloweenMemoryGame-card-front');
 		const flipper = cardElement.querySelector('.halloweenMemoryGame-card-flipper');
-		if (! (cardFront && flipper)) {
+		if (! cardFront || ! flipper) {
 			return;
 		}
 
@@ -113,13 +122,53 @@
 		return savedCards;
 	};
 
+	const saveBoard = (board, savedBoards) => {
+		const boardId = Object.keys(savedBoards).length || 0;
+		savedBoards[ boardId ] = board;
+
+		localStorage.setItem('mh-spooky-shuffle-boards', JSON.stringify(savedBoards));
+
+		return savedBoards;
+	};
+
 	onAjaxRequest((req) => {
-		if (! (req && req.memory_game)) {
+		if (! req || ! req.memory_game) {
 			return;
 		}
 
+		const savedBoards = getSavedBoards();
+		const currentBoard = {
+			is_upgraded: req.memory_game.is_upgraded,
+			is_complete: req.memory_game.is_complete,
+			title_range: req.memory_game.title_range,
+			cards: req.memory_game.cards,
+		};
+
+		// Save ticket start count for tickets_used calculation for new boards.
+		if (isNewBoard(currentBoard, req)) {
+			localStorage.setItem('mh-spooky-shuffle-cached-start-tickets', req.memory_game.num_tickets);
+		}
+
 		if (req.memory_game.is_complete) {
+			currentBoard.num_tickets_start = parseInt(localStorage.getItem('mh-spooky-shuffle-cached-start-tickets')) || null;
+			currentBoard.num_tickets_end = req.memory_game.num_tickets;
+			if (! currentBoard.num_tickets_start) {
+				currentBoard.tickets_used = null;
+			} else {
+				currentBoard.tickets_used = currentBoard.num_tickets_start - currentBoard.num_tickets_end;
+			}
+
+			saveBoard(currentBoard, savedBoards);
+
+			// Set cached tickets to see if ticket activity has occured between cache time and start of new board.
+			localStorage.setItem('mh-spooky-shuffle-cached-tickets', req.memory_game.num_tickets);
+
+			// Remove cached start tickets so that a failed isNewBoard check doesn't allow for an older cached start ticket
+			// to be used in a tickets_used calculation for a completed currentBoard that did not pass the isNewBoard check at its start.
+			localStorage.removeItem('mh-spooky-shuffle-cached-start-tickets');
+
 			localStorage.removeItem('mh-spooky-shuffle-cards');
+
 			const shownCards = document.querySelectorAll('.halloweenMemoryGame-card-flipper');
 			if (shownCards) {
 				shownCards.forEach((card) => {
@@ -134,8 +183,6 @@
 					card.classList.remove('mh-spooky-shuffle-card-front');
 				});
 			}
-
-			return;
 		}
 
 		const cardNames = document.querySelectorAll('.mh-spooky-shuffle-card-name');
